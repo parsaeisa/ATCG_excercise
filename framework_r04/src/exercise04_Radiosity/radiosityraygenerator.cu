@@ -84,6 +84,31 @@ __device__ PrimitiveData makePrimitiveData(const ComputeFormFactorMatrixInstance
 }
 
 
+__global__ void jacobiIterationKernel(
+    glm::vec3* radiosity,
+    glm::vec3* new_radiosity,
+    const glm::vec3* emissions,
+    const glm::vec3* albedos,
+    const float* form_factor_matrix,
+    int total_primitives,
+    float lambda)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total_primitives) return;
+
+    glm::vec3 sum(0.0f);
+    for (int j = 0; j < total_primitives; ++j)
+    {
+        if (j != idx)
+        {
+            sum += albedos[j] * form_factor_matrix[idx * total_primitives + j] * radiosity[j];
+        }
+    }
+
+    new_radiosity[idx] = emissions[idx] + lambda * (emissions[idx] - sum);
+}
+
+
 
 
 extern "C" __global__ void __raygen__generateRadiosity()

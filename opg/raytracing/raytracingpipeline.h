@@ -120,7 +120,7 @@ struct ShaderEntryPointDesc
 {
     std::string ptx_filename;
     std::string entrypoint_name;
-};
+}
 
 class RayTracingPipeline
 {

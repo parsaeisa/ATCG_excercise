@@ -177,6 +177,7 @@ void RadiosityRayGenerator::computeRadiosity()
     // Build the emissions vector in host memory
     std::vector<glm::vec3> emissions(m_total_primitive_count);
     std::vector<glm::vec3> albedos(m_total_primitive_count);
+
     size_t primitive_offset = 0;
     for (const auto &radiosity_emitter : m_radiosityEmitters)
     {
@@ -208,8 +209,63 @@ void RadiosityRayGenerator::computeRadiosity()
      * - Hint: you can write your own CUDA kernels in radiositykernels.h/cu.
      */
 
-}
+    std::vector<glm::vec3> radiosity = emissions;
 
+    opg::DeviceBuffer<glm::vec3> radiosity_buffer;
+    radiosity_buffer.alloc(m_total_primitive_count);
+    radiosity_buffer.upload(radiosity.data());
+
+    opg::DeviceBuffer<glm::vec3> new_radiosity_buffer;
+    new_radiosity_buffer.alloc(m_total_primitive_count);
+
+    float lambda = 1.0f;
+    const int max_iterations = 500;
+    const float tolerance = 1e-4f;
+
+    for (int iter = 0; iter < max_iterations; ++iter)
+    {
+        jacobiIterationKernel<<<(m_total_primitive_count + 255) / 256, 256>>>(
+            radiosity_buffer.devicePtr(),
+            new_radiosity_buffer.devicePtr(),
+            emissions_buffer.devicePtr(),
+            albedos_buffer.devicePtr(),
+            form_factor_matrix_buffer.devicePtr(),
+            m_total_primitive_count,
+            lambda
+        );
+
+        cudaMemcpy(radiosity_buffer.devicePtr(), new_radiosity_buffer.devicePtr(), 
+                   m_total_primitive_count * sizeof(glm::vec3), cudaMemcpyDeviceToDevice);
+
+        bool converged = true;
+
+        std::vector<glm::vec3> old_radiosity_host(m_total_primitive_count);
+        std::vector<glm::vec3> new_radiosity_host(m_total_primitive_count);
+
+        cudaMemcpy(old_radiosity_host.data(), radiosity_buffer.devicePtr(), total_primitives * sizeof(glm::vec3), cudaMemcpyDeviceToHost);
+        cudaMemcpy(new_radiosity_host.data(), new_radiosity_buffer.devicePtr(), total_primitives * sizeof(glm::vec3), cudaMemcpyDeviceToHost);
+
+        for (int i = 0; i < total_primitives; ++i)        
+            if (glm::length(new_radiosity_host[i] - old_radiosity_host[i]) > tolerance)        
+                converged = false;                    
+        
+        if (converged)
+        {
+            break;
+        }
+    }
+    
+    radiosity_buffer.download(radiosity.data());
+    
+    primitive_offset = 0;
+    for (auto &radiosity_emitter : m_radiosityEmitters)
+    {
+        size_t primitive_count = radiosity_emitter->m_primitiveCount;
+        std::copy(radiosity.begin() + primitive_offset, radiosity.begin() + primitive_offset + primitive_count, 
+                  radiosity_emitter->m_primitiveRadiosity.begin());
+        primitive_offset += primitive_count;
+    }
+}
 
 namespace opg {
 
